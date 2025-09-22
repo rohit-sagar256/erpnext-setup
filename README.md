@@ -130,6 +130,63 @@ location /private/files {
 
 ---
 
+## 🌍 Adding Domain & SSL
+
+### Step 1. Point Domain to VPS
+- In your registrar (GoDaddy, Cloudflare, etc.), add an **A record**:
+  ```
+  erp.yourdomain.com → <your-server-ip>
+  ```
+- Wait for DNS to propagate.
+
+### Step 2. Add Domain to ERPNext Site
+```bash
+cd ~/frappe-bench
+bench config dns_multitenant on
+bench setup add-domain --site prod.localhost erp.yourdomain.com
+bench setup nginx
+sudo systemctl reload nginx
+```
+
+Now your site should open at `http://erp.yourdomain.com`.
+
+### Step 3. Enable SSL with Let’s Encrypt (Recommended)
+```bash
+sudo apt install certbot -y
+cd ~/frappe-bench
+bench setup lets-encrypt erp.yourdomain.com
+```
+
+This auto-renews SSL certificates.
+
+### Step 4. Manual SSL (Optional)
+If you already have SSL certs from your registrar:
+```nginx
+server {
+    listen 443 ssl;
+    server_name erp.yourdomain.com;
+
+    ssl_certificate /etc/ssl/certs/erp.crt;
+    ssl_certificate_key /etc/ssl/private/erp.key;
+
+    location / {
+        proxy_pass http://127.0.0.1:8000;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+    }
+}
+```
+
+Reload Nginx:
+```bash
+sudo nginx -t
+sudo systemctl reload nginx
+```
+
+---
+
 ## 🔒 Permissions
 
 ERPNext often fails to serve CSS/JS because Nginx (`www-data`) can’t read assets.
@@ -277,7 +334,7 @@ bench restart
 
 - **Development** → Fast, simple, run with `bench start`.
 - **Production** → Supervisor + Nginx, serves on port 80.
+- Scripts automate full setup.
 - README provides fixes for Python, Node, MariaDB, permissions, Supervisor, Nginx, and assets.
 - Multi-site supported with additional `bench new-site` commands.
 - Security hardened by changing defaults, enabling HTTPS, and using ACLs for permissions.
-# erpnext-setup
