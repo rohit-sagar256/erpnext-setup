@@ -262,23 +262,55 @@ bench build
 
 ERPNext supports multiple sites in one bench.
 
-Create new site:
+### Subdomains (Recommended)
 ```bash
 cd ~/frappe-bench
-bench new-site demo.localhost --admin-password admin --mariadb-root-password root
-bench --site demo.localhost install-app erpnext
-```
+bench new-site site1.localhost --admin-password admin --mariadb-root-password root
+bench --site site1.localhost install-app erpnext
 
-Switch default site:
-```bash
-bench use demo.localhost
-```
+bench new-site site2.localhost --admin-password admin --mariadb-root-password root
+bench --site site2.localhost install-app erpnext
 
-Rebuild Nginx config:
-```bash
 bench setup nginx
 sudo systemctl reload nginx
 ```
+Now map:
+```
+erp1.example.com → site1.localhost
+erp2.example.com → site2.localhost
+```
+
+This is the **officially supported** and most stable method.
+
+### Different Domains
+```
+companyA.com → siteA.local
+companyB.com → siteB.local
+```
+
+### Subfolders (⚠️ Not Supported by Frappe)
+Frappe does not support `/erp1`, `/erp2` natively.
+If you must, use an **Nginx reverse proxy hack**:
+
+```nginx
+server {
+    listen 80;
+    server_name example.com;
+
+    location /erp1 {
+        proxy_pass http://127.0.0.1:8001;
+        proxy_set_header Host site1.localhost;
+    }
+
+    location /erp2 {
+        proxy_pass http://127.0.0.1:8002;
+        proxy_set_header Host site2.localhost;
+    }
+}
+```
+- Each site must run on its own port.
+- Frappe still thinks it’s running on `site1.localhost` / `site2.localhost`.
+- **Not recommended** for production use.
 
 ---
 
@@ -336,5 +368,6 @@ bench restart
 - **Production** → Supervisor + Nginx, serves on port 80.
 - Scripts automate full setup.
 - README provides fixes for Python, Node, MariaDB, permissions, Supervisor, Nginx, and assets.
-- Multi-site supported with additional `bench new-site` commands.
+- Multi-site supported with **subdomains/domains** (recommended).
+- Subfolders are possible with Nginx reverse proxy hacks, but **not supported** by Frappe core.
 - Security hardened by changing defaults, enabling HTTPS, and using ACLs for permissions.
