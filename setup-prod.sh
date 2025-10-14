@@ -83,26 +83,68 @@ yarn -v || true
 # -------------------------
 # 5) MariaDB configuration (EC2-safe)
 # -------------------------
-echo_prefix "Configuring MariaDB (EC2-safe socket -> password conversion)..."
+# --- Configure MariaDB root/password robustly (EC2-safe) ---
+echo "[+] Configuring MariaDB (robust EC2-safe root setup)..."
 sudo systemctl enable mariadb
 sudo systemctl start mariadb
 
-PLUGIN=$(sudo mariadb -N -e "SELECT plugin FROM mysql.user WHERE user='root' AND host='localhost';" || echo "unknown")
-if [ "$PLUGIN" = "unix_socket" ]; then
-  echo_prefix "Root uses unix_socket; switching to mysql_native_password..."
-  sudo mariadb -e "ALTER USER 'root'@'localhost' IDENTIFIED WITH mysql_native_password BY '$DB_PASS'; FLUSH PRIVILEGES;"
-else
-  echo "Root plugin is $PLUGIN (no change required)."
+# Use socket (sudo mariadb) because root usually authenticates via unix_socket on Ubuntu EC2
+# Try several compatible commands (MySQL/MariaDB variants). Stop when one succeeds.
+set +e
+sudo mariadb -e "SELECT VERSION();" >/dev/null 2>&1
+if [ $? -ne 0 ]; then
+  echo "[!] Unable to run mariadb via socket. Please check MariaDB service."
+  exit 1
 fi
 
-# verify login
-if mysql -u root -p"$DB_PASS" -e "SELECT VERSION();" >/dev/null 2>&1; then
-  echo "MariaDB password auth OK."
+echo "[+] Trying MySQL/MariaDB compatible ALTER statements..."
+
+# 1) MySQL-style (works on MySQL 8)
+sudo mariadb -e "ALTER USER 'root'@'localhost' IDENTIFIED WITH mysql_native_password BY '$DB_PASS';" >/dev/null 2>&1
+if [ $? -eq 0 ]; then
+  echo "[✓] Applied: ALTER USER ... IDENTIFIED WITH mysql_native_password BY ... (MySQL syntax)"
 else
-  echo "Retrying MariaDB password setup via socket..."
-  sudo mariadb -e "ALTER USER 'root'@'localhost' IDENTIFIED WITH mysql_native_password BY '$DB_PASS'; FLUSH PRIVILEGES;"
-  mysql -u root -p"$DB_PASS" -e "SELECT VERSION();" || { echo "MariaDB setup failed"; exit 1; }
+  # 2) MySQL alternate: VIA ... USING PASSWORD (some MariaDB / MySQL variants)
+  sudo mariadb -e "ALTER USER 'root'@'localhost' IDENTIFIED VIA mysql_native_password USING PASSWORD('$DB_PASS');" >/dev/null 2>&1
+  if [ $? -eq 0 ]; then
+    echo "[✓] Applied: ALTER USER ... IDENTIFIED VIA ... USING PASSWORD(...)"
+  else
+    # 3) MariaDB-friendly: ALTER USER ... IDENTIFIED BY 'password'
+    sudo mariadb -e "ALTER USER 'root'@'localhost' IDENTIFIED BY '$DB_PASS';" >/dev/null 2>&1
+    if [ $? -eq 0 ]; then
+      echo "[✓] Applied: ALTER USER ... IDENTIFIED BY ... (MariaDB-friendly)"
+    else
+      # 4) Fallback to SET PASSWORD (works on many MariaDB versions)
+      sudo mariadb -e "SET PASSWORD FOR 'root'@'localhost' = PASSWORD('$DB_PASS'); FLUSH PRIVILEGES;" >/dev/null 2>&1
+      if [ $? -eq 0 ]; then
+        echo "[✓] Applied: SET PASSWORD FOR ... = PASSWORD(...)"
+      else
+        # 5) Last resort: attempt to update mysql.user (try both common column names)
+        echo "[!] All simple methods failed; attempting direct mysql.user update (last resort)..."
+        # Try common column names: authentication_string (MySQL), Password (older), plugin
+        sudo mariadb -e "UPDATE mysql.user SET plugin='mysql_native_password' WHERE User='root' AND Host='localhost'; FLUSH PRIVILEGES;" >/dev/null 2>&1
+        sudo mariadb -e "UPDATE mysql.user SET authentication_string=PASSWORD('$DB_PASS') WHERE User='root' AND Host='localhost'; FLUSH PRIVILEGES;" >/dev/null 2>&1
+        sudo mariadb -e "UPDATE mysql.user SET Password=PASSWORD('$DB_PASS') WHERE User='root' AND Host='localhost'; FLUSH PRIVILEGES;" >/dev/null 2>&1
+        if [ $? -eq 0 ]; then
+          echo "[✓] Updated mysql.user (last-resort updates applied)."
+        else
+          echo "[✖] Unable to set root password automatically. Manual fix required."
+          exit 1
+        fi
+      fi
+    fi
+  fi
 fi
+set -e
+
+# final verify
+if mysql -u root -p"$DB_PASS" -e "SELECT VERSION();" >/dev/null 2>&1; then
+  echo "[✓] MariaDB root password configured successfully."
+else
+  echo "[✖] MariaDB root password configuration failed (final verify)."
+  exit 1
+fi
+
 
 # -------------------------
 # 6) Create frappe system user & groups
